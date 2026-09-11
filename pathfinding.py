@@ -25,6 +25,11 @@ GRIDLINE = (55, 55, 55)
 WALL_C   = (200, 200, 200)
 START_C  = (80, 200, 120)
 GOAL_C   = (220, 80, 80)
+EXPLORED_C = (60, 90, 140)
+PATH_C     = (240, 200, 60)
+
+# (row delta, column delta) — up, down, left, right
+ORTHOGONAL = [(-1, 0), (1, 0), (0, -1), (0, 1)]
 
 
 # --- Board -------------------------------------------------------------------
@@ -43,6 +48,8 @@ class Board:
         self.grid = [[EMPTY] * self.cols for _ in range(self.rows)]
         self.start = None
         self.goal = None
+        self.explored = []
+        self.path = []
 
     def cell_at(self, pos):
         """Mouse (x, y) -> (row, col). y gives the row, x gives the column."""
@@ -86,8 +93,11 @@ class Board:
                 if self.grid[r][c] == WALL:
                     self._fill_cell(screen, r, c, WALL_C)
 
-        # Search-state layers (explored, frontier, final path) will go here,
-        # above the walls but below the start and goal markers.
+        for r, c in self.explored:
+            self._fill_cell(screen, r, c, EXPLORED_C)
+
+        for r, c in self.path:
+            self._fill_cell(screen, r, c, PATH_C)
 
         if self.start is not None:
             self._fill_cell(screen, *self.start, START_C)
@@ -106,6 +116,12 @@ class Board:
         for r in range(self.rows + 1):
             pygame.draw.line(screen, GRIDLINE, (0, r * CELL), (WIDTH, r * CELL))
 
+    def neighbors(self, r, c):
+        """Yield walkable cells adjacent to (r, c)."""
+        for dr, dc in ORTHOGONAL:
+            nr, nc = r + dr, c + dc
+            if self.in_bounds(nr, nc) and not self.is_wall(nr, nc):
+                yield nr, nc
 
 # --- Main loop ---------------------------------------------------------------
 
@@ -146,6 +162,119 @@ def handle_drag(board):
         else:
             board.erase(r, c)
 
+def reconstruct_path(came_from, start, goal):
+    """Walk backwards from goal to start. Returns [] if goal wasn't reached."""
+    if goal != start and goal not in came_from:
+        return []
+
+    path = [goal]
+    current = goal
+    while current != start:
+        current = came_from[current]
+        path.append(current)
+
+    path.reverse()
+    return path
+
+from collections import deque
+
+
+def bfs(board, start, goal):
+    """Breadth-first search. Returns (path, explored).
+
+    Explores in order of steps from the start, so the first route found
+    to the goal is the shortest. Ignores movement cost entirely.
+    """
+    queue = deque([start])
+    came_from = {}
+    visited = {start}
+    explored = []
+
+    while queue:
+        current = queue.popleft()
+        explored.append(current)
+
+        if current == goal:
+            break
+
+        for neighbor in board.neighbors(*current):
+            if neighbor not in visited:
+                visited.add(neighbor)
+                came_from[neighbor] = current
+                queue.append(neighbor)
+                pass
+
+    return reconstruct_path(came_from, start, goal), explored
+
+import heapq
+
+MOVE_COST = 1
+
+
+def manhattan(a, b):
+    """Steps along the grid, ignoring walls. Admissible for 4-way movement."""
+    return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+
+def astar(board, start, goal, h=manhattan):
+    """A* search. Returns (path, explored).
+
+    Expands the cell with the lowest f = g + h, where g is the known cost
+    from the start and h estimates the cost remaining to the goal.
+    """
+    count = 0
+    open_heap = [(h(start, goal), count, start)]
+    came_from = {}
+    g_score = {start: 0}
+    closed = set()
+    explored = []
+
+    while open_heap:
+        _, _, current = heapq.heappop(open_heap)
+
+        if current in closed:
+            continue            # stale duplicate; a cheaper copy already ran
+        closed.add(current)
+        explored.append(current)
+
+        if current == goal:
+            break
+
+        for neighbor in board.neighbors(*current):
+            tentative_g = g_score[current] + MOVE_COST
+
+            if neighbor not in g_score or tentative_g < g_score[neighbor]:
+                g_score[neighbor] = tentative_g
+                came_from[neighbor] = current
+                count += 1
+                f = tentative_g + h(neighbor, goal)
+                heapq.heappush(open_heap, (f, count, neighbor))
+
+    return reconstruct_path(came_from, start, goal), explored
+
+def handle_event(event, board):
+    if event.type == pygame.QUIT:
+        return False
+
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        mods = pygame.key.get_mods()
+        r, c = board.cell_at(event.pos)
+        if board.in_bounds(r, c):
+            if mods & pygame.KMOD_SHIFT:
+                board.set_start(r, c)
+            elif mods & pygame.KMOD_ALT:
+                board.set_goal(r, c)
+
+    if event.type == pygame.KEYDOWN:
+        if event.key == pygame.K_c:
+            board.clear()
+        elif event.key == pygame.K_SPACE:
+            if board.start is not None and board.goal is not None:
+                board.path, board.explored = astar(board, board.start, board.goal)
+                print(f"path: {len(board.path)} cells, explored: {len(board.explored)}")
+            else:
+                print("set a start (shift-click) and goal (alt-click) first")
+    return True
 
 def main():
     pygame.init()
