@@ -1,14 +1,24 @@
 """
 A* Pathfinding Exploration Project
-Grid rendering and mouse input.
+
+An interactive grid where you can paint obstacles, place a start and a goal,
+and watch A* search for the shortest route between them. Breadth-first search
+is included for comparison: it explores the same board without a heuristic,
+which makes the difference in explored cells visible side by side.
 
 Controls:
     Left click / drag    paint walls
     Right click / drag   erase
     Shift + left click   set start
     Alt + left click     set goal
+    Space                run A* with the selected heuristic
+    1 / 2 / 3 / 4        manhattan / euclidean / chebyshev / weighted
     C                    clear the board
 """
+
+import heapq
+import math
+from collections import deque
 
 import pygame
 
@@ -20,11 +30,17 @@ WIDTH, HEIGHT = COLS * CELL, ROWS * CELL
 
 EMPTY, WALL = 0, 1
 
-BG       = (30, 30, 30)
-GRIDLINE = (55, 55, 55)
-WALL_C   = (200, 200, 200)
-START_C  = (80, 200, 120)
-GOAL_C   = (220, 80, 80)
+MOVE_COST = 1
+
+# Search steps advanced per frame. Higher is faster but less watchable;
+# 1 shows every expansion individually.
+STEPS_PER_FRAME = 5
+
+BG         = (30, 30, 30)
+GRIDLINE   = (55, 55, 55)
+WALL_C     = (200, 200, 200)
+START_C    = (80, 200, 120)
+GOAL_C     = (220, 80, 80)
 EXPLORED_C = (60, 90, 140)
 PATH_C     = (240, 200, 60)
 
@@ -50,6 +66,8 @@ class Board:
         self.goal = None
         self.explored = []
         self.path = []
+        self.search = None          # running generator, or None when idle
+        self.h_name, self.h = "manhattan", manhattan
 
     def cell_at(self, pos):
         """Mouse (x, y) -> (row, col). y gives the row, x gives the column."""
@@ -61,6 +79,13 @@ class Board:
 
     def is_wall(self, r, c):
         return self.grid[r][c] == WALL
+
+    def neighbors(self, r, c):
+        """Yield walkable cells adjacent to (r, c)."""
+        for dr, dc in ORTHOGONAL:
+            nr, nc = r + dr, c + dc
+            if self.in_bounds(nr, nc) and not self.is_wall(nr, nc):
+                yield nr, nc
 
     def paint_wall(self, r, c):
         if (r, c) != self.start and (r, c) != self.goal:
@@ -85,6 +110,28 @@ class Board:
         self.grid[r][c] = EMPTY
         self.goal = (r, c)
 
+    def begin_search(self):
+        """Arm a stepped search. Nothing runs until the main loop advances it."""
+        self.explored = []
+        self.path = []
+        self.search = astar_steps(self, self.start, self.goal,
+                                  self.explored, h=self.h)
+
+    def advance_search(self, steps=STEPS_PER_FRAME):
+        """Run up to `steps` expansions. Collects the path once finished."""
+        if self.search is None:
+            return
+
+        try:
+            for _ in range(steps):
+                next(self.search)
+        except StopIteration as done:
+            # A generator's return value arrives attached to StopIteration.
+            self.path = done.value
+            self.search = None
+            print(f"{self.h_name}: path {len(self.path)} cells, "
+                  f"explored {len(self.explored)}")
+
     def draw(self, screen):
         screen.fill(BG)
 
@@ -93,6 +140,7 @@ class Board:
                 if self.grid[r][c] == WALL:
                     self._fill_cell(screen, r, c, WALL_C)
 
+        # Layer order: explored underneath, path over it, markers on top.
         for r, c in self.explored:
             self._fill_cell(screen, r, c, EXPLORED_C)
 
@@ -116,51 +164,42 @@ class Board:
         for r in range(self.rows + 1):
             pygame.draw.line(screen, GRIDLINE, (0, r * CELL), (WIDTH, r * CELL))
 
-    def neighbors(self, r, c):
-        """Yield walkable cells adjacent to (r, c)."""
-        for dr, dc in ORTHOGONAL:
-            nr, nc = r + dr, c + dc
-            if self.in_bounds(nr, nc) and not self.is_wall(nr, nc):
-                yield nr, nc
 
-# --- Main loop ---------------------------------------------------------------
+# --- Heuristics --------------------------------------------------------------
+#
+# Each estimates the remaining cost from a cell to the goal. A heuristic is
+# admissible if it never overestimates that cost; admissible heuristics
+# guarantee A* returns an optimal path.
 
-def handle_event(event, board):
-    """Discrete actions: one response per occurrence."""
-    if event.type == pygame.QUIT:
-        return False
-
-    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-        mods = pygame.key.get_mods()
-        r, c = board.cell_at(event.pos)
-        if board.in_bounds(r, c):
-            if mods & pygame.KMOD_SHIFT:
-                board.set_start(r, c)
-            elif mods & pygame.KMOD_ALT:
-                board.set_goal(r, c)
-
-    if event.type == pygame.KEYDOWN and event.key == pygame.K_c:
-        board.clear()
-
-    return True
+def manhattan(a, b):
+    """|dr| + |dc|. Exact remaining distance on an open 4-way grid."""
+    return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
 
-def handle_drag(board):
-    """Continuous state: checked fresh every frame so dragging works."""
-    left, _, right = pygame.mouse.get_pressed()
-    if not (left or right):
-        return
+def euclidean(a, b):
+    """Straight-line distance. Ignores that you can't move diagonally."""
+    return math.hypot(a[0] - b[0], a[1] - b[1])
 
-    mods = pygame.key.get_mods()
-    if mods & (pygame.KMOD_SHIFT | pygame.KMOD_ALT):
-        return  # modifier held: that click is placing start/goal, not painting
 
-    r, c = board.cell_at(pygame.mouse.get_pos())
-    if board.in_bounds(r, c):
-        if left:
-            board.paint_wall(r, c)
-        else:
-            board.erase(r, c)
+def chebyshev(a, b):
+    """max(|dr|, |dc|). Assumes a diagonal step costs the same as a straight one."""
+    return max(abs(a[0] - b[0]), abs(a[1] - b[1]))
+
+
+def weighted_manhattan(a, b, w=1.5):
+    """Manhattan scaled up. Deliberately inadmissible — may overestimate."""
+    return w * manhattan(a, b)
+
+
+HEURISTICS = {
+    pygame.K_1: ("manhattan", manhattan),
+    pygame.K_2: ("euclidean", euclidean),
+    pygame.K_3: ("chebyshev", chebyshev),
+    pygame.K_4: ("weighted", weighted_manhattan),
+}
+
+
+# --- Search ------------------------------------------------------------------
 
 def reconstruct_path(came_from, start, goal):
     """Walk backwards from goal to start. Returns [] if goal wasn't reached."""
@@ -175,8 +214,6 @@ def reconstruct_path(came_from, start, goal):
 
     path.reverse()
     return path
-
-from collections import deque
 
 
 def bfs(board, start, goal):
@@ -202,40 +239,39 @@ def bfs(board, start, goal):
                 visited.add(neighbor)
                 came_from[neighbor] = current
                 queue.append(neighbor)
-                pass
 
     return reconstruct_path(came_from, start, goal), explored
 
-import heapq
 
-MOVE_COST = 1
-
-
-def manhattan(a, b):
-    """Steps along the grid, ignoring walls. Admissible for 4-way movement."""
-    return abs(a[0] - b[0]) + abs(a[1] - b[1])
-
-
-def astar(board, start, goal, h=manhattan):
-    """A* search. Returns (path, explored).
+def astar_steps(board, start, goal, explored, h=manhattan):
+    """A* search as a generator. Yields once per expansion; returns the path.
 
     Expands the cell with the lowest f = g + h, where g is the known cost
     from the start and h estimates the cost remaining to the goal.
+
+    Heap entries are (f, -g, count, cell). The -g term breaks ties toward
+    cells further from the start, which keeps the search from fanning out
+    across every equal-cost route. count breaks any remaining ties by
+    insertion order, so two cells are never compared against each other.
+
+    `explored` is supplied by the caller rather than created here, so the
+    caller holds the same list object the search appends to and can draw
+    the frontier as it grows.
     """
     count = 0
-    open_heap = [(h(start, goal), count, start)]
+    open_heap = [(h(start, goal), 0, count, start)]
     came_from = {}
     g_score = {start: 0}
     closed = set()
-    explored = []
 
     while open_heap:
-        _, _, current = heapq.heappop(open_heap)
+        _, _, _, current = heapq.heappop(open_heap)
 
         if current in closed:
             continue            # stale duplicate; a cheaper copy already ran
         closed.add(current)
         explored.append(current)
+        yield               # pause here; the caller redraws and resumes us
 
         if current == goal:
             break
@@ -248,11 +284,30 @@ def astar(board, start, goal, h=manhattan):
                 came_from[neighbor] = current
                 count += 1
                 f = tentative_g + h(neighbor, goal)
-                heapq.heappush(open_heap, (f, count, neighbor))
+                heapq.heappush(open_heap, (f, -tentative_g, count, neighbor))
 
-    return reconstruct_path(came_from, start, goal), explored
+    return reconstruct_path(came_from, start, goal)
+
+
+def astar(board, start, goal, h=manhattan):
+    """Run astar_steps to completion. Returns (path, explored).
+
+    Same algorithm as the animated version — it drives the identical
+    generator — so headless comparisons and on-screen runs can't diverge.
+    """
+    explored = []
+    search = astar_steps(board, start, goal, explored, h=h)
+    try:
+        while True:
+            next(search)
+    except StopIteration as done:
+        return done.value, explored
+
+
+# --- Input handling ----------------------------------------------------------
 
 def handle_event(event, board):
+    """Discrete actions: one response per occurrence. Returns False to quit."""
     if event.type == pygame.QUIT:
         return False
 
@@ -268,13 +323,37 @@ def handle_event(event, board):
     if event.type == pygame.KEYDOWN:
         if event.key == pygame.K_c:
             board.clear()
+        elif event.key in HEURISTICS:
+            board.h_name, board.h = HEURISTICS[event.key]
+            print(f"heuristic: {board.h_name}")
         elif event.key == pygame.K_SPACE:
             if board.start is not None and board.goal is not None:
-                board.path, board.explored = astar(board, board.start, board.goal)
-                print(f"path: {len(board.path)} cells, explored: {len(board.explored)}")
+                board.begin_search()
             else:
                 print("set a start (shift-click) and goal (alt-click) first")
+
     return True
+
+
+def handle_drag(board):
+    """Continuous state: checked fresh every frame so dragging works."""
+    left, _, right = pygame.mouse.get_pressed()
+    if not (left or right):
+        return
+
+    mods = pygame.key.get_mods()
+    if mods & (pygame.KMOD_SHIFT | pygame.KMOD_ALT):
+        return  # modifier held: that click is placing start/goal, not painting
+
+    r, c = board.cell_at(pygame.mouse.get_pos())
+    if board.in_bounds(r, c):
+        if left:
+            board.paint_wall(r, c)
+        else:
+            board.erase(r, c)
+
+
+# --- Main loop ---------------------------------------------------------------
 
 def main():
     pygame.init()
@@ -290,6 +369,7 @@ def main():
             running = handle_event(event, board) and running
 
         handle_drag(board)
+        board.advance_search()
 
         board.draw(screen)
         pygame.display.flip()
