@@ -6,6 +6,8 @@ as ground truth: it ignores heuristics entirely and always returns a
 shortest path, so any A* run with a longer path is suboptimal.
 
 Run: python compare.py
+
+AI assistance was used in this project; see the AI use section of README.md.
 """
 
 import time

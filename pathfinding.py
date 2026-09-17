@@ -14,6 +14,8 @@ Controls:
     Space                run A* with the selected heuristic
     1 / 2 / 3 / 4        manhattan / euclidean / chebyshev / weighted
     C                    clear the board
+
+AI assistance was used in this project; see the AI use section of README.md.
 """
 
 import heapq
@@ -59,6 +61,11 @@ class Board:
         self.clear()
 
     def clear(self):
+        """Reset the board to empty and drop any search state.
+
+        Used both by __init__ and by the C key, so pressing C also clears
+        the explored/path overlay and returns the heuristic to manhattan.
+        """
         # A comprehension builds a fresh list per row. [[EMPTY] * cols] * rows
         # would store the same row object repeatedly, so one write hits them all.
         self.grid = [[EMPTY] * self.cols for _ in range(self.rows)]
@@ -133,6 +140,12 @@ class Board:
                   f"explored {len(self.explored)}")
 
     def draw(self, screen):
+        """Redraw the whole board from current state.
+
+        Called every frame rather than patched incrementally: nothing is
+        "added to the screen," the screen is rebuilt from self.grid and the
+        search results each time.
+        """
         screen.fill(BG)
 
         for r in range(self.rows):

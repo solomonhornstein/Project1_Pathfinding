@@ -58,9 +58,6 @@ structural difference.
 Admissible means never overestimating the true remaining cost, which is what
 guarantees an optimal path.
 
-<!-- TODO: a sentence or two on why you picked these four and what you
-     expected before running the comparison. -->
-
 ## Results
 
 40×40 grid, start (5, 5), goal (34, 34). `explored` = cells expanded.
@@ -135,3 +132,5 @@ by mechanism: discrete actions as events, drag-to-paint polled each frame.
 Claude (Anthropic) was used throughout this project. Full conversation:
 
 https://claude.ai/share/5614601f-90f1-4d0b-8869-64854857f754
+
+I used Claude (Anthropic) throughout this project, alongside the course-recommended resources. I used it to set up my environment (diagnosing a pygame install failure caused by Python 3.14 having no wheels, and moving to 3.12), and to explain concepts I hadn't used before — generators, heapq, and what makes a heuristic admissible. For the algorithms, Claude gave me annotated scaffolds with the core logic left blank, and I wrote the neighbor-expansion block in BFS and the g_score comparison and update block in A* myself. It reviewed my file structure and reorganized it into the current class-based layout, and it diagnosed two bugs: a duplicate handle_event definition that Python was silently overwriting, and a missing tie-break term that was causing A* to explore the entire bounding rectangle. It drafted the README from results I generated, which I then edited. I chose Claude over FlintK12 because I wanted explanations of why the code worked rather than working code, and it was willing to leave gaps for me to fill.
