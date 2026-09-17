@@ -30,6 +30,11 @@ ROWS, COLS = 40, 40
 CELL = 18
 WIDTH, HEIGHT = COLS * CELL, ROWS * CELL
 
+# HEIGHT is the grid only; the window is taller to leave room for the
+# status strip, so gridlines stop at HEIGHT and don't run through it.
+STATUS_H = 32
+SCREEN_H = HEIGHT + STATUS_H
+
 EMPTY, WALL = 0, 1
 
 MOVE_COST = 1
@@ -75,6 +80,7 @@ class Board:
         self.path = []
         self.search = None          # running generator, or None when idle
         self.h_name, self.h = "manhattan", manhattan
+        self.status = "manhattan    shift-click: start    alt-click: goal    space: run"
 
     def cell_at(self, pos):
         """Mouse (x, y) -> (row, col). y gives the row, x gives the column."""
@@ -132,14 +138,16 @@ class Board:
         try:
             for _ in range(steps):
                 next(self.search)
+            self.status = f"{self.h_name}    searching...    explored {len(self.explored)}"
         except StopIteration as done:
             # A generator's return value arrives attached to StopIteration.
             self.path = done.value
             self.search = None
-            print(f"{self.h_name}: path {len(self.path)} cells, "
-                  f"explored {len(self.explored)}")
+            self.status = (f"{self.h_name}    path {len(self.path)}    "
+                           f"explored {len(self.explored)}")
+            print(self.status)
 
-    def draw(self, screen):
+    def draw(self, screen, font):
         """Redraw the whole board from current state.
 
         Called every frame rather than patched incrementally: nothing is
@@ -166,6 +174,8 @@ class Board:
             self._fill_cell(screen, *self.goal, GOAL_C)
 
         self._draw_gridlines(screen)
+        label = font.render(self.status, True, (200, 200, 200))
+        screen.blit(label, (8, HEIGHT + 9))
 
     def _fill_cell(self, screen, r, c, color):
         """Single place where (row, col) becomes (x, y). Column is x."""
@@ -338,12 +348,13 @@ def handle_event(event, board):
             board.clear()
         elif event.key in HEURISTICS:
             board.h_name, board.h = HEURISTICS[event.key]
+            board.status = f"{board.h_name}    space: run"
             print(f"heuristic: {board.h_name}")
         elif event.key == pygame.K_SPACE:
             if board.start is not None and board.goal is not None:
                 board.begin_search()
             else:
-                print("set a start (shift-click) and goal (alt-click) first")
+                board.status = "set a start (shift-click) and a goal (alt-click)"
 
     return True
 
@@ -370,9 +381,10 @@ def handle_drag(board):
 
 def main():
     pygame.init()
-    screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    screen = pygame.display.set_mode((WIDTH, SCREEN_H))
     pygame.display.set_caption("A* Pathfinding")
     clock = pygame.time.Clock()
+    font = pygame.font.SysFont("menlo", 14)
 
     board = Board(ROWS, COLS)
 
@@ -384,7 +396,7 @@ def main():
         handle_drag(board)
         board.advance_search()
 
-        board.draw(screen)
+        board.draw(screen, font)
         pygame.display.flip()
         clock.tick(60)
 
